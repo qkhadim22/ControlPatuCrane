@@ -24,25 +24,33 @@ from Models.FlexibleMultibody import NNHydraulics
 
 os.environ['OMP_NUM_THREADS'] = '8' 
 
-timeStep    = 5e-3              #Simulation time step: Change it as desired.
-T           = 10               #Time period
+#######################
+#LOAD Experimetal data--
+
+# If you change data here, then also change in ControlSignals file
+fileName = 'ExpData/CaptureData_2022-04-12_14-24-18_vf_110_pp_140_from_th0_15dg_both_booms_moving_processed.txt'
+ExpData = np.loadtxt(fileName, delimiter=' ')
+
+###############################
+
+timeStep    = 1e-3                  #Simulation time step: Change it as desired.
+T           = 25                    #Time period
 ns          = int(T/timeStep)       
-angleInit1  = np.deg2rad(14.6)  #Lift boom angle               
-angleInit2  = np.deg2rad(-58.8) #Tilt boom angle 
+angleInit1  = ExpData[0,16]         #np.deg2rad(14.6)  #Lift boom angle               
+angleInit2  = ExpData[0,17]         #np.deg2rad(-58.8)     #Tilt boom angle 
+LiftLoad    = 0
 
 Plotting    =  True
 
 dataPath    = 'solution/data' + str(T) + '-' + 's' + str(ns) + 'Steps' 
 
 
-model       = NNHydraulics(nStepsTotal=ns, endTime=T, Flexible=True, 
-                      nModes=2, #Change it, as desired.
-                      loadFromSavedNPY=True, 
-                      visualization  = False,
+model       = NNHydraulics(nStepsTotal=ns, endTime=T,  mL    = LiftLoad,
+                           Flexible=True, nModes=2, loadFromSavedNPY=True, 
                       verboseMode=1)
 
 inputVec    =model.CreateInputVector( ns,  angleInit1,angleInit2 )
-data = model.ComputeModel(inputVec, solutionViewer = True) #solutionViewer: for visualization
+data = model.ComputeModel(inputVec, solutionViewer = False) #solutionViewer: for visualization
 
 data_array = np.array(data, dtype=object)
 np.save(dataPath, data_array)

@@ -21,7 +21,7 @@ from exudyn.FEM import *
 import math as mt
 from math import sin, cos, sqrt, pi, tanh
 import time
-from Models.ControlSignals import uref_1, uref_2
+from Models.ControlSignals import uref_1, uref_2,Pump
 
 
 import matplotlib.pyplot as plt
@@ -30,12 +30,15 @@ from exudyn.signalProcessing import GetInterpolatedSignalValue
 
 
 
-import scipy.io
+import scipy.io 
+from scipy.optimize import fsolve, newton
+
 import os
 import numpy as np
 
-
-import os, sys
+import math as mt
+from math import sin, cos, sqrt, pi, tanh, atan2,degrees
+import time
 
 SC  = exu.SystemContainer()
 mbs = SC.AddSystem()
@@ -78,8 +81,8 @@ W5              = 0.15           # Width in z-direction
         
 pS              = 100e5
 pT              = 1e5                           # Tank pressure
-Qn1             = 10*(18/60000)/(sqrt(20e5)*9.9)                      # Nominal flow rate of valve at 18 l/min under
-Qn2             = 10*(22/60000)/(sqrt(20e5)*9.9)                      # Nominal flow rate of valve at 18 l/min under
+Qn1             = (18/60000)/((9.9)*sqrt(35e5))        # 10*(18/60000)/(sqrt(20e5)*9.9), Nominal flow rate of valve at 18 l/min under
+Qn2             = (18/60000)/((9.9)*sqrt(35e5)) # 10*(22/60000)/(sqrt(20e5)*9.9), # Nominal flow rate of valve at 18 l/min under
 
 # Cylinder and piston parameters
 L_Cyl1          = 820e-3                            # Cylinder length
@@ -109,8 +112,19 @@ fileName2       = 'LowQualityPATU/LiftBoom.stl'
 fileName3       = 'LowQualityPATU/TiltBoom.stl'
 fileName4       = 'LowQualityPATU/Bracket1.stl'
 fileName5       = 'LowQualityPATU/Bracket2.stl'
+fileName6       = 'LowQualityPATU/ExtensionBoom.stl'
 
 #fileNameT       = 'TiltBoomANSYS/TiltBoom' #for load/save of FEM data
+
+#######################
+#LOAD Experimetal data--
+
+# If you change data here, then also change in ControlSignals file
+fileName = 'ExpData/CaptureData_2022-04-12_14-24-18_vf_110_pp_140_from_th0_15dg_both_booms_moving_processed.txt'
+ExpData = np.loadtxt(fileName, delimiter=' ')
+
+###############################
+
 
 feL             = FEMinterface()
 feT             = FEMinterface()
@@ -119,14 +133,14 @@ feT             = FEMinterface()
 class NNHydraulics():
 
     #initialize class 
-    def __init__(self, nStepsTotal=100, endTime=0.5, Flexible=True,
+    def __init__(self, nStepsTotal=100, endTime=0.5,mL= 50, Flexible=True,
                  nModes = 2, loadFromSavedNPY=True,
                  visualization = False,
                  verboseMode = 0):
 
         self.nStepsTotal = nStepsTotal
         self.endTime = endTime
-        
+        self.mL     = mL
         #+++++++++++++++++++++++++++++
         #from hydraulics:
         self.Flexible = Flexible
@@ -136,10 +150,10 @@ class NNHydraulics():
         self.StaticCase = False
         #+++++++++++++++++++++++++++++
 
-        self.p1     = 2e6
-        self.p2     = 2e6
-        self.p3     = 2e6
-        self.p4     = 2e6
+        self.p1     = ExpData[0,3]*1e5  #2e6
+        self.p2     = ExpData[0,4]*1e5  #2e6
+        self.p3     = ExpData[0,7]*1e5  #2e6
+        self.p4     = ExpData[0,8]*1e5  #2e6
         
         self.timeVecOut = np.arange(1,self.nStepsTotal+1)/self.nStepsTotal*self.endTime
         
@@ -162,18 +176,26 @@ class NNHydraulics():
     #isTest is True in case of test data creation
     def CreateInputVector(self, relCnt = 0, theta1 = 0,theta2=0, isTest=False):
         
-        vec = np.zeros(4*self.nStepsTotal)
+        vec = np.zeros(6*self.nStepsTotal)
         U1  = np.zeros(self.nStepsTotal)
         U2  = np.zeros(self.nStepsTotal)
+        pP  = np.zeros(self.nStepsTotal)
         
         for i in range(self.nStepsTotal):
-            U1[i] =uref_1(self.timeVecOut[i])
-            U2[i] =uref_2(self.timeVecOut[i])
+            # U1[i] =uref_1(self.timeVecOut[i])
+            # U2[i] =uref_2(self.timeVecOut[i])
+            # pP[i] =Pump(self.timeVecOut[i])
+            
+            U1[i] =uref_1(int(i))
+            U2[i] =uref_2(int(i))
+            pP[i] =Pump(int(i))
+            
 
-        vec[0:self.nStepsTotal]                         = U1      
-        vec[1*(self.nStepsTotal):2*(self.nStepsTotal)]  = U2
-        vec[2*(self.nStepsTotal)]  = theta1
-        vec[3*(self.nStepsTotal)]  = theta2
+        vec[0:self.nStepsTotal]                         = U1[0:self.nStepsTotal]      
+        vec[1*(self.nStepsTotal):2*(self.nStepsTotal)]  = U2[0:self.nStepsTotal]
+        vec[2*(self.nStepsTotal):3*(self.nStepsTotal)]  = pP[0:self.nStepsTotal]
+        vec[4*(self.nStepsTotal)]  = theta1
+        vec[5*(self.nStepsTotal)]  = theta2
 
         return vec
             
@@ -188,9 +210,10 @@ class NNHydraulics():
         
         # rv['t']          = inputData[0:self.nStepsTotal]       
         rv['U1']         = inputData[0*(self.nStepsTotal):1*(self.nStepsTotal)]      
-        rv['U2']         = inputData[1*(self.nStepsTotal):2*(self.nStepsTotal)]       
-        rv['theta1']     = inputData[2*(self.nStepsTotal):3*(self.nStepsTotal)]       
-        rv['theta2']     = inputData[3*(self.nStepsTotal):4*(self.nStepsTotal)]       
+        rv['U2']         = inputData[1*(self.nStepsTotal):2*(self.nStepsTotal)]  
+        rv['PUMP']       = inputData[2*(self.nStepsTotal):3*(self.nStepsTotal)]  
+        rv['theta1']     = inputData[3*(self.nStepsTotal):4*(self.nStepsTotal)]       
+        rv['theta2']     = inputData[4*(self.nStepsTotal):5*(self.nStepsTotal)]       
 
         # rv['theta1']    = inputData[2*(self.nStepsTotal):3*(self.nStepsTotal)]
          
@@ -223,19 +246,24 @@ class NNHydraulics():
 
         self.inputTimeU1 = np.zeros((self.nStepsTotal,2))
         self.inputTimeU2 = np.zeros((self.nStepsTotal,2))
+        self.inputTimepP = np.zeros((self.nStepsTotal,2))
 
         self.inputTimeU1[:,0] = self.timeVecOut
         self.inputTimeU1[:,1] = inputDict['U1']
         
         self.inputTimeU2[:,0] = self.timeVecOut
         self.inputTimeU2[:,1] = inputDict['U2']
+        
+        self.inputTimepP[:,0] = self.timeVecOut
+        self.inputTimepP[:,1] = inputDict['PUMP']
 
         self.mbs.variables['inputTimeU1'] = self.inputTimeU1
         self.mbs.variables['inputTimeU2'] = self.inputTimeU2
+        self.mbs.variables['PUMP'] = self.inputTimepP
 
         
-        self.mbs.variables['theta1'] = inputData[self.nStepsTotal*2]
-        self.mbs.variables['theta2'] = inputData[self.nStepsTotal*3]
+        self.mbs.variables['theta1'] = inputData[self.nStepsTotal*4]
+        self.mbs.variables['theta2'] = inputData[self.nStepsTotal*5]
         
         self.PatuCrane(self.mbs.variables['theta1'], self.mbs.variables['theta2'],
                                    self.p1, self.p2, self.p3, self.p4)
@@ -259,6 +287,10 @@ class NNHydraulics():
         outputData['anularVelocity1'] = self.mbs.GetSensorStoredData(DS['anularVelocity1'])[0:self.nStepsTotal,1:4]
         outputData['angle2'] = self.mbs.GetSensorStoredData(DS['angle2'])[0:self.nStepsTotal,1:4]
         outputData['anularVelocity2'] = self.mbs.GetSensorStoredData(DS['anularVelocity2'])[0:self.nStepsTotal,1:4]
+        
+        #outputData['angle3'] = self.mbs.GetSensorStoredData(DS['angle3'])[0:self.nStepsTotal,1:4]
+        #outputData['angle4'] = self.mbs.GetSensorStoredData(DS['angle4'])[0:self.nStepsTotal,1:4]
+        
         
         outputData['sPressuresL'] = self.mbs.GetSensorStoredData(DS['sPressuresL'])[0:1*self.nStepsTotal,1:3]
         outputData['sPressuresT'] = self.mbs.GetSensorStoredData(DS['sPressuresT'])[0:1*self.nStepsTotal,1:3]
@@ -405,18 +437,26 @@ class NNHydraulics():
             noodeWeightsJoint1T = [1/nodeListJoint1TLen]*nodeListJoint1TLen
                         
             # Boundary condition at Piston 1
-            p14                 = [9.5e-2,0.24,-7.15e-2]
-            p13                 = [9.5e-2,0.24, 7.15e-2]
+            p14                 = [-9.5e-2,0.24,-7.15e-2]
+            p13                 = [-9.5e-2,0.24, 7.15e-2]
             radius7             = 2.5e-002
             nodeListPist1T      = feT.GetNodesOnCylinder(p13, p14, radius7, tolerance=1e-2)  
             pJoint2T            = feT.GetNodePositionsMean(nodeListPist1T)
             nodeListPist1TLen   = len(nodeListPist1T)
             noodeWeightsPist1T  = [1/nodeListPist1TLen]*nodeListPist1TLen
+
+             # Boundary condition at extension boom
+            p16                 = [-0.415,0.295,-0.051783]
+            p15                 = [-0.415,0.295, 0.051783]
+            radius8             = 2.5e-002
+            nodeListExtT        = feT.GetNodesOnCylinder(p15, p16, radius8, tolerance=1e-2)  
+            pExtT               = feT.GetNodePositionsMean(nodeListExtT)
+            nodeListExTLen      = len(nodeListExtT)
+            noodeWeightsExt1T   = [1/nodeListExTLen]*nodeListExTLen
                     
             boundaryListL   = [nodeListJoint1,nodeListPist1, nodeListJoint2,  nodeListJoint3] 
-            boundaryListT  = [nodeListJoint1T, nodeListPist1T]
-            
-            
+            boundaryListT  = [nodeListJoint1T, nodeListPist1T,nodeListExtT]
+                                
                 
             if not self.loadFromSavedNPY:
                 start_time      = time.time()
@@ -441,16 +481,8 @@ class NNHydraulics():
                                                           rotationMatrixRef  = RotationMatrixZ((self.theta1)),
                                                           gravity=g,
                                                           color=colLift,)
-            
-            
-                    
-            TiltBoomFFRF        = TiltBoom.AddObjectFFRFreducedOrder(self.mbs, positionRef=np.array([-0.09, 1.4261, 0])+
-                                                                      + np.array([2.76-12e-3,  0.846520-12e-3, 0]), #2.879420180699481+27e-3, -0.040690041435711005+8.3e-2, 0
-                                                          initialVelocity=[0,0,0], 
-                                                          initialAngularVelocity=[0,0,0],
-                                                          rotationMatrixRef  = RotationMatrixZ((self.theta2))   ,
-                                                          gravity=g,
-                                                          color=colLift,)
+
+
             Marker7         = self.mbs.AddMarker(MarkerSuperElementRigid(bodyNumber=LiftBoomFFRF['oFFRFreducedOrder'],
                                                           meshNodeNumbers=np.array(nodeListJoint1), #these are the meshNodeNumbers
                                                            weightingFactors=noodeWeightsJoint1))
@@ -468,6 +500,21 @@ class NNHydraulics():
             Marker11        = self.mbs.AddMarker(MarkerSuperElementRigid(bodyNumber=LiftBoomFFRF['oFFRFreducedOrder'],
                                                          meshNodeNumbers=np.array(nodeListJoint3), #these are the meshNodeNumbers
                                                          weightingFactors=noodeWeightsJoint3))
+            
+            if self.StaticCase or self.StaticInitialization:
+                #compute reference length of distance constraint 
+                self.mbs.Assemble()
+                
+                TiltP = self.mbs.GetMarkerOutput(Marker11, variableType=exu.OutputVariableType.Position, 
+                                                 configuration=exu.ConfigurationType.Initial)
+                    
+            TiltBoomFFRF        = TiltBoom.AddObjectFFRFreducedOrder(self.mbs, positionRef=TiltP, #2.879420180699481+27e-3, -0.040690041435711005+8.3e-2, 0
+                                                          initialVelocity=[0,0,0], 
+                                                          initialAngularVelocity=[0,0,0],
+                                                          rotationMatrixRef  = RotationMatrixZ(mt.radians(self.theta2))   ,
+                                                          gravity=g,
+                                                          color=colLift,)
+
                     
             Marker13        = self.mbs.AddMarker(MarkerSuperElementRigid(bodyNumber=TiltBoomFFRF['oFFRFreducedOrder'], 
                                                                                   meshNodeNumbers=np.array(nodeListJoint1T), #these are the meshNodeNumbers
@@ -476,12 +523,21 @@ class NNHydraulics():
             Marker14        = self.mbs.AddMarker(MarkerSuperElementRigid(bodyNumber=TiltBoomFFRF['oFFRFreducedOrder'], 
                                                                                   meshNodeNumbers=np.array(nodeListPist1T), #these are the meshNodeNumbers
                                                                                   weightingFactors=noodeWeightsPist1T))  
+            
+            
+            MarkerEx        = self.mbs.AddMarker(MarkerSuperElementRigid(bodyNumber=TiltBoomFFRF['oFFRFreducedOrder'], 
+                                                                                  meshNodeNumbers=np.array(nodeListExtT), #these are the meshNodeNumbers
+                                                                                  weightingFactors=noodeWeightsExt1T))  
+       
        
         else:
+            
+            #Rigid pillar
+            pMid2           = np.array([1.229248, 0.055596, 0])  
             iCube2          = RigidBodyInertia(mass=143.66, com=pMid2,
-                                            inertiaTensor=np.array([[1.055433, 1.442440,  -0.000003],
-                                                                    [ 1.442440,  66.577004, 0],
-                                                                    [ -0.000003,              0  ,  67.053707]]),
+                                            inertiaTensor=np.array([[1.295612, 2.776103,  -0.000003],
+                                                                    [ 2.776103,  110.443667, 0],
+                                                                    [ -0.000003,              0  ,  110.452812]]),
                                             inertiaTensorAtCOM=True)
             
             graphicsBody2   = GraphicsDataFromSTLfile(fileName2, color4blue,
@@ -494,7 +550,7 @@ class NNHydraulics():
                                 inertia=iCube2,  # includes COM
                                 nodeType=exu.NodeType.RotationEulerParameters,
                                 position=LiftP,  # pMid2
-                                rotationMatrix=RotationMatrixZ((self.theta1)),
+                                rotationMatrix=RotationMatrixZ(mt.radians(self.theta1)),
                                 gravity=g,
                                 graphicsDataList=[graphicsCOM2, graphicsBody2])
             
@@ -503,8 +559,15 @@ class NNHydraulics():
             Marker9         = self.mbs.AddMarker(MarkerBodyRigid(bodyNumber=b2, localPosition=[1.263, 0.206702194, 0]))         #With Cylinder 2
             Marker10        = self.mbs.AddMarker(MarkerBodyRigid(bodyNumber=b2, localPosition=[2.69107, -6e-3, 0]))         #With Bracket 1  
             Marker11        = self.mbs.AddMarker(MarkerBodyRigid(bodyNumber=b2, localPosition=[2.886080943, 0.019892554, 0]))   #With Tilt Boom
-                       
-            # Third Body: TiltBoom+ExtensionBoom   
+            
+            if self.StaticCase or self.StaticInitialization:
+                #compute reference length of distance constraint 
+                self.mbs.Assemble()
+                
+                TiltP = self.mbs.GetMarkerOutput(Marker11, variableType=exu.OutputVariableType.Position, 
+                                                 configuration=exu.ConfigurationType.Initial)
+                
+              # Third Body: TiltBoom+ExtensionBoom   
             pMid3           = np.array([ 0.659935,  0.251085, 0])  # center of mass
             iCube3          = RigidBodyInertia(mass=83.311608+ 9.799680, com=pMid3,
                                                   inertiaTensor=np.array([[0.884199, 1.283688, -0.000001],
@@ -517,16 +580,71 @@ class NNHydraulics():
             [n3, b3]        = AddRigidBody(mainSys=self.mbs,
                                     inertia=iCube3,  # includes COM
                                     nodeType=exu.NodeType.RotationEulerParameters,
-                                    position=LiftP + np.array([2.76,  0.846520, 0]),  # pMid2
-                                    rotationMatrix=RotationMatrixZ((self.theta2)),
+                                    position=TiltP,  # pMid2
+                                    rotationMatrix=RotationMatrixZ(mt.radians(self.theta2)),
                                     gravity=g,
                                     graphicsDataList=[graphicsCOM3, graphicsBody3])
             Marker13        = self.mbs.AddMarker(MarkerBodyRigid(bodyNumber=b3, localPosition=[0, 0, 0]))                        #With LIft Boom 
             Marker14        = self.mbs.AddMarker(MarkerBodyRigid(bodyNumber=b3, localPosition=[-0.095, 0.24043237, 0])) 
+            MarkerEx        = self.mbs.AddMarker(MarkerBodyRigid(bodyNumber=b3, localPosition=[-0.415,0.295, 0]))
+       
+        # ##########################################
+                # --- UPDATE POSITIONS ---
+        ###########################################
+        if self.StaticCase or self.StaticInitialization:
+            #compute reference length of distance constraint 
+            self.mbs.Assemble()
+            Bracket1L = self.mbs.GetMarkerOutput(Marker10, variableType=exu.OutputVariableType.Position, 
+                                             configuration=exu.ConfigurationType.Initial)
             
+            Bracket1B = self.mbs.GetMarkerOutput(Marker14, variableType=exu.OutputVariableType.Position, 
+                                             configuration=exu.ConfigurationType.Initial)
+            
+            ExtensionP = self.mbs.GetMarkerOutput(MarkerEx, variableType=exu.OutputVariableType.Position, 
+                                             configuration=exu.ConfigurationType.Initial)
+            
+            #exu.StartRenderer()
+            
+            def AnalyticalEq(p):
+                theta3_degrees, theta4_degrees = p
+                
+                # if theta3_degrees < 75:
+                #     theta3_degrees = 75
+                # elif theta3_degrees > 150:
+                #     theta3_degrees = 150
+
+                # if theta4_degrees < 120:
+                #     theta4_degrees = 120
+                # elif theta4_degrees > 225:
+                #     theta4_degrees = 225
+                
+                theta3 = np.radians(theta3_degrees)
+                theta4 = np.radians(theta4_degrees) 
+                                
+                eq1 =    l3 * cos(theta3) + l4 * cos(np.pi-theta4) + l2x -d1
+                eq2 =    l3 * sin(theta3) + l4 * sin(np.pi-theta4) + l2y +h1
+                
+                return [eq1, eq2]
+            
+            l3         = NormL2(np.array([ 0,  0, 0]) - np.array([0.456, -0.0405, 0]))  
+            l4         = NormL2(np.array([ 0,  0, 0]) - np.array([0.48, 0, 0]))  
+            d1         = Bracket1L[0]-TiltP[0]
+            h1         = Bracket1L[1]-TiltP[1]
+            l2x        = -(Bracket1B[0]-TiltP[0])
+            l2y        = -(Bracket1B[1]-TiltP[1])
+            
+            # alpha0     = degrees(atan2((Bracket1B[1] - TiltP[1]), (Bracket1B[0] - TiltP[0])))
+            
+            initialangles  = [130.562128044041, 180.26679642675617]
+            solutions = fsolve(AnalyticalEq, initialangles)
+            self.theta3, self.theta4 = solutions
+            
+            print(self.theta3,self.theta4)
+
+
         # # # # # # 4th Body: Bracket 1
-        Bracket1L       = LiftP + np.array([2.579002-6e-3, 0.7641933967880499+5e-3, 0])
-        pMid4           = np.array([0.004000, 0.257068, 0])  # center of mass, body0,0.004000,-0.257068
+        #Bracket1L       = LiftP + np.array([2.579002-6e-3, 0.7641933967880499+5e-3, 0])
+        pMid4           = np.array([0.257068, 0.004000 , 0])  # center of mass, body0,0.004000,-0.257068
         iCube4          = RigidBodyInertia(mass=11.524039, com=pMid4,
                                                     inertiaTensor=np.array([[0.333066, 0.017355, 0],
                                                                             [0.017355, 0.081849, 0],
@@ -539,12 +657,11 @@ class NNHydraulics():
         [n4, b4]        = AddRigidBody(mainSys=self.mbs,inertia=iCube4,  # includes COM
                                                   nodeType=exu.NodeType.RotationEulerParameters,
                                                   position=Bracket1L,  # pMid2
-                                                  rotationMatrix=RotationMatrixZ(mt.radians(20.6)), #-0.414835768117858
+                                                  rotationMatrix=RotationMatrixZ(mt.radians(self.theta3)), #-0.414835768117858
                                                   gravity=g,graphicsDataList=[graphicsCOM4, graphicsBody4])
                 
         # # # # 5th Body: Bracket 2
         pMid5           = np.array([0.212792, 0, 0])  # center of mass, body0
-        Bracket1B       = LiftP + np.array([2.791569774713015+112e-3, 1.08619-40e-3, 0])  #0.285710892999728-1.8*0.0425, -0.356968041652145+0.0525
         iCube5          = RigidBodyInertia(mass=7.900191, com=pMid5,
                                                       inertiaTensor=np.array([[0.052095, 0, 0],
                                                                               [0,  0.260808, 0],
@@ -557,16 +674,52 @@ class NNHydraulics():
         [n5, b5]        = AddRigidBody(mainSys=self.mbs,inertia=iCube5,  # includes COM
                                                   nodeType=exu.NodeType.RotationEulerParameters,
                                                   position=Bracket1B,  # pMid2
-                                                  rotationMatrix=RotationMatrixZ(mt.radians(160.1)) ,   #-5, 140
+                                                  rotationMatrix=RotationMatrixZ(mt.radians(self.theta4)) ,   #-5, 140
                                                   gravity=g,graphicsDataList=[graphicsCOM5, graphicsBody5])
                 
             
                 
         Marker15        = self.mbs.AddMarker(MarkerBodyRigid(bodyNumber=b4, localPosition=[0, 0, 0]))                        #With LIft Boom 
-        Marker16        = self.mbs.AddMarker(MarkerBodyRigid(bodyNumber=b4, localPosition=[0.0425, 0.472227402-15e-3, 0]))  
+        Marker16        = self.mbs.AddMarker(MarkerBodyRigid(bodyNumber=b4, localPosition=[0.456, -0.0405 , 0]))  
         Marker18        = self.mbs.AddMarker(MarkerBodyRigid(bodyNumber=b5, localPosition=[0, 0, 0]))                        #With LIft Boom 
         Marker19        = self.mbs.AddMarker(MarkerBodyRigid(bodyNumber=b5, localPosition=[0.475+5e-3, 0, 0]))                   #With LIft Boom,-0.475 
-                
+
+
+        # # # # 5th Body: Bracket 2
+        pMid6           = np.array([1.15, 0.06, 0])  # center of mass, body0
+        iCube6          = RigidBodyInertia(mass=58.63, com=pMid6,
+                                               inertiaTensor=np.array([[0.13, 0, 0],
+                                                                       [0.10,  28.66, 0],
+                                                                       [0,              0,  28.70]]),
+                                                                       inertiaTensorAtCOM=True)
+         
+        graphicsBody6   = GraphicsDataFromSTLfile(fileName6, color4blue,verbose=False, invertNormals=True,invertTriangles=True)
+        graphicsBody6   = AddEdgesAndSmoothenNormals(graphicsBody6, edgeAngle=0.25*pi,addEdges=True, smoothNormals=True)
+        graphicsCOM6    = GraphicsDataBasis(origin=iCube6.com, length=2*W5)
+        [n6, b6]        = AddRigidBody(mainSys=self.mbs,inertia=iCube6,  # includes COM
+                                           nodeType=exu.NodeType.RotationEulerParameters,
+                                           position=ExtensionP+np.array([0, -0.10, 0]),  # pMid2
+                                           rotationMatrix=RotationMatrixZ(mt.radians(self.theta2)) ,   #-5, 140
+                                           gravity=g,graphicsDataList=[graphicsCOM6, graphicsBody6]) 
+        
+        Marker20        = self.mbs.AddMarker(MarkerBodyRigid(bodyNumber=b6, localPosition=[0, 0.1, 0]))
+        
+        if self.mL != 0:
+            TipLoadMarker     = self.mbs.AddMarker(MarkerBodyRigid(bodyNumber=b6, localPosition=[2.45, 0.05, 0]))
+            pos = self.mbs.GetMarkerOutput(TipLoadMarker, variableType=exu.OutputVariableType.Position, 
+                                           configuration=exu.ConfigurationType.Reference)
+            print('pos=', pos)
+            bMass = self.mbs.CreateMassPoint(physicsMass=self.mL, referencePosition=pos, show=True,
+                                     graphicsDataList=[GraphicsDataSphere(radius=0.1, color=color4red)])
+            mMass = self.mbs.AddMarker(MarkerBodyPosition(bodyNumber=bMass))
+            self.mbs.AddObject(SphericalJoint(markerNumbers=[TipLoadMarker, mMass], visualization=VSphericalJoint(show=False)))             #With LIft Boom,-0.475 
+        
+            
+        if self.StaticCase or self.StaticInitialization:
+            #compute reference length of distance constraint 
+            self.mbs.Assemble()
+            #exu.StartRenderer()
+            
         #++++++++++++ Add joints
                 
         # #Add Revolute Joint btw Pillar and LiftBoom
@@ -576,6 +729,7 @@ class NNHydraulics():
         # # #Add Revolute Joint btw LiftBoom and TiltBoom
         self.mbs.AddObject(GenericJoint(markerNumbers=[Marker11, Marker13],constrainedAxes=[1,1,1,1,1,0],
                                     visualization=VObjectJointGeneric(axesRadius=0.22*W3,axesLength=0.16)))     
+        
          
         # # # # #Add Revolute Joint btw LiftBoom and Bracket 1
         self.mbs.AddObject(GenericJoint(markerNumbers=[Marker10, Marker15],constrainedAxes=[1,1,1,1,1,0],
@@ -587,7 +741,11 @@ class NNHydraulics():
                 
         # # # # Revolute joint between Bracket 2 and TiltBoom
         self.mbs.AddObject(GenericJoint(markerNumbers=[Marker18, Marker14],constrainedAxes=[1,1,0,0,0,0],
-                                        visualization=VObjectJointGeneric(axesRadius=0.23*W5,axesLength=0.20)))   
+                                        visualization=VObjectJointGeneric(axesRadius=0.23*W5,axesLength=0.20)))  
+        
+        # Fixed joint between Tilt boom and extension boom
+        self.mbs.AddObject(GenericJoint(markerNumbers=[MarkerEx, Marker20],constrainedAxes=[1, 1, 1, 1, 1, 1],
+        visualization=VObjectJointGeneric(axesRadius=0.2*W1,axesLength=1.4*W1)))
                 
         
         #add hydraulics actuator:
@@ -630,7 +788,7 @@ class NNHydraulics():
                                                         nodeNumbers=[nODE1], offsetLength=LH1, strokeLength=L_Pis1, chamberCrossSection0=A[0], 
                                                         chamberCrossSection1=A[1], hoseVolume0=V1, hoseVolume1=V2, valveOpening0=0, 
                                                         valveOpening1=0, actuatorDamping=5e5, oilBulkModulus=Bo, cylinderBulkModulus=Bc, 
-                                                        hoseBulkModulus=Bh, nominalFlow=Qn1, systemPressure=pS, tankPressure=pT, 
+                                                        hoseBulkModulus=Bh, nominalFlow=Qn1, systemPressure=0, tankPressure=pT, 
                                                         useChamberVolumeChange=True, activeConnector=True, 
                                                         visualization={'show': True, 'cylinderRadius': 50e-3, 'rodRadius': 28e-3, 
                                                                         'pistonRadius': 0.04, 'pistonLength': 0.001, 'rodMountRadius': 0.0, 
@@ -641,7 +799,7 @@ class NNHydraulics():
                                                           nodeNumbers=[nODE2], offsetLength=LH2, strokeLength=L_Pis2, chamberCrossSection0=A[0], 
                                                           chamberCrossSection1=A[1], hoseVolume0=V1, hoseVolume1=V2, valveOpening0=0, 
                                                           valveOpening1=0, actuatorDamping=0.06e5, oilBulkModulus=Bo, cylinderBulkModulus=Bc, 
-                                                          hoseBulkModulus=Bh, nominalFlow=Qn2, systemPressure=pS, tankPressure=pT, 
+                                                          hoseBulkModulus=Bh, nominalFlow=Qn2, systemPressure=0, tankPressure=pT, 
                                                           useChamberVolumeChange=True, activeConnector=True, 
                                                           visualization={'show': True, 'cylinderRadius': 50e-3, 'rodRadius': 28e-3, 
                                                                           'pistonRadius': 0.04, 'pistonLength': 0.001, 'rodMountRadius': 0.0, 
@@ -684,6 +842,8 @@ class NNHydraulics():
                     Av2 = GetInterpolatedSignalValue(t, mbs.variables['inputTimeU2'], timeArray= [], dataArrayIndex= 1, 
                                                    timeArrayIndex= 0, rangeWarning= False)
                 
+                    pP = GetInterpolatedSignalValue(t, mbs.variables['PUMP'], timeArray= [], dataArrayIndex= 1, 
+                                                  timeArrayIndex= 0, rangeWarning= False)
 
                     Av1 = -Av0
                     Av3 = -Av2
@@ -693,6 +853,9 @@ class NNHydraulics():
                        mbs.SetObjectParameter(oHA1, "valveOpening1", Av1)
                        mbs.SetObjectParameter(oHA2, "valveOpening0", Av2)
                        mbs.SetObjectParameter(oHA2, "valveOpening1", Av3)
+                       
+                       mbs.SetObjectParameter(oHA1, "systemPressure", pP)
+                       mbs.SetObjectParameter(oHA2, "systemPressure", pP)
                         
                 return True
 
@@ -709,26 +872,24 @@ class NNHydraulics():
             AngVelocity2       = self.mbs.AddSensor(SensorNode(nodeNumber= TiltBoomFFRF['nRigidBody'], storeInternal=True,
                                                                fileName = f"solution/Simulation_Flexible_f_modes_{self.nModes}_angularVelocity2.txt", outputVariableType=exu.OutputVariableType.AngularVelocity))
            
-            sForce1          = self.mbs.AddSensor(SensorObject(objectNumber=oHA1, storeInternal=True, 
+            sForce1          = self.mbs.AddSensor(SensorObject(objectNumber=oHA1, storeInternal=True, fileName = 'solution/sForce1.txt',
                                                                outputVariableType=exu.OutputVariableType.Force))
-            sForce2          = self.mbs.AddSensor(SensorObject(objectNumber=oHA2, storeInternal=True, 
+            sForce2          = self.mbs.AddSensor(SensorObject(objectNumber=oHA2, storeInternal=True, fileName = 'solution/sForce2.txt',
                                                                outputVariableType=exu.OutputVariableType.Force))
-            sDistance1       = self.mbs.AddSensor(SensorObject(objectNumber=oHA1, storeInternal=True, 
-                                                               outputVariableType=exu.OutputVariableType.Distance))
-            sDistance2       = self.mbs.AddSensor(SensorObject(objectNumber=oHA2, storeInternal=True, 
-                                                               outputVariableType=exu.OutputVariableType.Distance))
-
-            
-            sVelocity1       = self.mbs.AddSensor(SensorObject(objectNumber=oHA1, storeInternal=True, 
+            sDistance1       = self.mbs.AddSensor(SensorObject(objectNumber=oHA1, storeInternal=True, fileName = 'solution/sDistance1.txt', 
+                                                   outputVariableType=exu.OutputVariableType.Distance))
+            sDistance2       = self.mbs.AddSensor(SensorObject(objectNumber=oHA2, storeInternal=True, fileName = 'solution/sDistance2.txt', 
+                                                   outputVariableType=exu.OutputVariableType.Distance))
+            sVelocity1       = self.mbs.AddSensor(SensorObject(objectNumber=oHA1, storeInternal=True, fileName = 'solution/sVelocity1.txt', 
                                                                outputVariableType=exu.OutputVariableType.VelocityLocal))
-            sVelocity2       = self.mbs.AddSensor(SensorObject(objectNumber=oHA2, storeInternal=True, 
+            sVelocity2       = self.mbs.AddSensor(SensorObject(objectNumber=oHA2, storeInternal=True, fileName = 'solution/sVelocity1.txt',
                                                                outputVariableType=exu.OutputVariableType.VelocityLocal))
 
             
             
-            sPressuresL      = self.mbs.AddSensor(SensorNode(nodeNumber=nODE1, storeInternal=True,
+            sPressuresL      = self.mbs.AddSensor(SensorNode(nodeNumber=nODE1, storeInternal=True,fileName = 'solution/sPressuresL.txt',
                                                              outputVariableType=exu.OutputVariableType.Coordinates))   
-            sPressuresT      = self.mbs.AddSensor(SensorNode(nodeNumber=nODE2, storeInternal=True,
+            sPressuresT      = self.mbs.AddSensor(SensorNode(nodeNumber=nODE2, storeInternal=True, fileName = 'solution/sPressuresT.txt',
                                                              outputVariableType=exu.OutputVariableType.Coordinates))   
 
             
@@ -746,6 +907,17 @@ class NNHydraulics():
                                                          fileName = 'solution/Simulation_Rigid_angle1.txt', outputVariableType=exu.OutputVariableType.Rotation))
             Angle2       = self.mbs.AddSensor(SensorBody(bodyNumber=b3, localPosition= pMid3, storeInternal=True,
                                                          fileName = 'solution/Simulation_Rigid_angle2.txt', outputVariableType=exu.OutputVariableType.Rotation))
+            
+            
+            # Angle3       = self.mbs.AddSensor(SensorBody( bodyNumber=b4,localPosition=pMid2, storeInternal=True, 
+            #                                              fileName = 'solution/Simulation_Rigid_angle3.txt', outputVariableType=exu.OutputVariableType.Rotation))
+            # Angle4       = self.mbs.AddSensor(SensorBody(bodyNumber=b5, localPosition= pMid3, storeInternal=True,
+            #                                              fileName = 'solution/Simulation_Rigid_angle4.txt', outputVariableType=exu.OutputVariableType.Rotation))
+            
+            
+            # self.dictSensors['angle3']=Angle3
+            # self.dictSensors['angle4']=Angle4
+            
             AngVelocity1       = self.mbs.AddSensor(SensorBody( bodyNumber=b2,localPosition=pMid2, storeInternal=True,
                                                                fileName = 'solution/Simulation_Rigid_angularVelocity1.txt', 
                                                                outputVariableType=exu.OutputVariableType.AngularVelocity))
@@ -755,13 +927,13 @@ class NNHydraulics():
             sForce2       = self.mbs.AddSensor(SensorObject(objectNumber=oHA2, storeInternal=True, fileName = 'solution/sForce2.txt', outputVariableType=exu.OutputVariableType.Force))
             sPressuresL      = self.mbs.AddSensor(SensorNode(nodeNumber=nODE1, storeInternal=True,fileName = 'solution/sPressuresL.txt', outputVariableType=exu.OutputVariableType.Coordinates)) 
             sPressuresT      = self.mbs.AddSensor(SensorNode(nodeNumber=nODE2, storeInternal=True,fileName = 'solution/sPressuresT.txt', outputVariableType=exu.OutputVariableType.Coordinates)) 
-            sDistance1       = self.mbs.AddSensor(SensorObject(objectNumber=oHA1, storeInternal=True, 
+            sDistance1       = self.mbs.AddSensor(SensorObject(objectNumber=oHA1, storeInternal=True, fileName = 'solution/sDistance1.txt', 
                                                    outputVariableType=exu.OutputVariableType.Distance))
-            sDistance2       = self.mbs.AddSensor(SensorObject(objectNumber=oHA2, storeInternal=True, 
+            sDistance2       = self.mbs.AddSensor(SensorObject(objectNumber=oHA2, storeInternal=True, fileName = 'solution/sDistance2.txt', 
                                                    outputVariableType=exu.OutputVariableType.Distance))
-            sVelocity1       = self.mbs.AddSensor(SensorObject(objectNumber=oHA1, storeInternal=True, 
+            sVelocity1       = self.mbs.AddSensor(SensorObject(objectNumber=oHA1, storeInternal=True, fileName = 'solution/sVelocity1.txt', 
                                                                outputVariableType=exu.OutputVariableType.VelocityLocal))
-            sVelocity2       = self.mbs.AddSensor(SensorObject(objectNumber=oHA2, storeInternal=True, 
+            sVelocity2       = self.mbs.AddSensor(SensorObject(objectNumber=oHA2, storeInternal=True, fileName = 'solution/sVelocity1.txt',
                                                                outputVariableType=exu.OutputVariableType.VelocityLocal))
 
         
@@ -783,7 +955,7 @@ class NNHydraulics():
         #assemble and solve    
         self.mbs.Assemble()
         self.simulationSettings = exu.SimulationSettings()   
-        self.simulationSettings.solutionSettings.sensorsWritePeriod = 10*(self.endTime / (self.nStepsTotal))
+        self.simulationSettings.solutionSettings.sensorsWritePeriod = 1*(self.endTime / (self.nStepsTotal))
         
         self.simulationSettings.timeIntegration.numberOfSteps            = self.GetNSimulationSteps()
         self.simulationSettings.timeIntegration.endTime                  = self.endTime
@@ -890,76 +1062,213 @@ class NNHydraulics():
     
     def Plotting(self, data): 
         Time = self.timeVecOut
+        end = Time.shape[0]
        
-        sDistance1         = np.loadtxt(f"solution/Simulation_Flexible_f_modes_{self.nModes}_angle1.txt", delimiter=',')
-        sDistance2         = np.loadtxt(f"solution/Simulation_Flexible_f_modes_{self.nModes}_angle2.txt", delimiter=',')
+        if self.Flexible:
+        #sAngle1         = np.loadtxt(f"solution/Simulation_Flexible_f_modes_{self.nModes}_angle1.txt", delimiter=',')
+        #sAngle2         = np.loadtxt(f"solution/Simulation_Flexible_f_modes_{self.nModes}_angle2.txt", delimiter=',')
         
         # sDistance1    = np.loadtxt(f"solution/Simulation_Flexible_f_modes_{self.nModes}_sDistance1.txt", delimiter=',')
         # sDistance2    = np.loadtxt(f"solution/Simulation_Flexible_f_modes_{self.nModes}_sDistance2.txt", delimiter=',')
-        sVelocity1   = np.loadtxt(f"solution/Simulation_Flexible_f_modes_{self.nModes}_angularVelocity1.txt", delimiter=',')
-        sVelocity2   = np.loadtxt(f"solution/Simulation_Flexible_f_modes_{self.nModes}_angularVelocity2.txt", delimiter=',')
+        #sVelocity1   = np.loadtxt(f"solution/Simulation_Flexible_f_modes_{self.nModes}_angularVelocity1.txt", delimiter=',')
+            sVelocity2   = np.loadtxt(f"solution/Simulation_Flexible_f_modes_{self.nModes}_angularVelocity2.txt", delimiter=',')
+        
+        else:
+            Angle1                   = np.loadtxt('solution/Simulation_Rigid_angle1.txt', delimiter=',')
+            Angle2                   = np.loadtxt('solution/Simulation_Rigid_angle2.txt', delimiter=',')
+            angularVelocity1         = np.loadtxt('solution/Simulation_Rigid_angularVelocity1.txt', delimiter=',')
+            angularVelocity2         = np.loadtxt('solution/Simulation_Rigid_angularVelocity2.txt', delimiter=',')
+            
+            sDistance1               = np.loadtxt('solution/sDistance1.txt', delimiter=',')
+            sDistance2               = np.loadtxt('solution/sDistance2.txt', delimiter=',')
+            #sVelocity1               = np.loadtxt('solution/sVelocity1.txt', delimiter=',')
+            #sVelocity2               = np.loadtxt('solution/sVelocity2.txt', delimiter=',')    
+            sPressuresL             = np.loadtxt('solution/sPressuresL.txt', delimiter=',')
+            sPressuresT             = np.loadtxt('solution/sPressuresT.txt', delimiter=',')
         
         
         # Lift actuator
         plt.figure(figsize=(10, 5))
-        plt.plot(sDistance1[:, 0], np.rad2deg(sDistance1[:, 3]), label='Simulation', linestyle='--', marker='x', 
+        plt.plot(Time, np.rad2deg(Angle1[0:end, 3]), label='Simulation', linestyle='--', marker='x', 
          linewidth=1, markersize=2, color='black')
+        
+        plt.plot(Time, ExpData[0:end,16], label='Experimental', marker='x', 
+         linewidth=1, markersize=2, color='green')
+        
         plt.xlabel('Time, s')  # Adjust label as appropriate
-        plt.ylabel('Angle, degree')  # Adjust label as appropriate
+        plt.ylabel('Angle 1, degree')  # Adjust label as appropriate
         plt.legend(loc='upper left')  # Specify legend location
         plt.grid(True)  # Add grid
         # Set axis limits
-        plt.xlim(0, 10)
+        plt.xlim(0, self.endTime)
         plt.ylim(0, 50)
         plt.tight_layout()
-        plt.savefig(f"solution/Flexible_f_modes_{self.nModes}_angle1.png")
+        plt.savefig('solution/angle1.png')
         plt.show()
 
 
+         # Lift actuator
         plt.figure(figsize=(10, 5))
-        plt.plot(sDistance1[:, 0], np.rad2deg(sVelocity1[:, 3]), label='Simulation', linestyle='--', marker='x', 
-         linewidth=1, markersize=2, color='black')
+        plt.plot(Time, np.rad2deg(Angle1[0:end, 3])+np.rad2deg(Angle2[0:end, 3]), label='Simulation', linestyle='--', marker='x', 
+          linewidth=1, markersize=2, color='black')
+         
+        plt.plot(Time, ExpData[0:end,17], label='Experimental', marker='x', 
+          linewidth=1, markersize=2, color='green')
+         
         plt.xlabel('Time, s')  # Adjust label as appropriate
-        plt.ylabel('Angular velocity, deg/s')  # Adjust label as appropriate
+        plt.ylabel('Angle 2, degree')  # Adjust label as appropriate
         plt.legend(loc='upper left')  # Specify legend location
         plt.grid(True)  # Add grid
         # Set axis limits
-        plt.xlim(0, 10)
-        plt.ylim(-20, 20)
-        plt.savefig(f"solution/Flexible_f_modes_{self.nModes}_angularvelocity1.png")
+        plt.xlim(0, self.endTime)
+        plt.ylim(-90, 90)
+        plt.tight_layout()
+        plt.savefig('solution/angle2.png')
+        plt.show()
+        
+        # Lift actuator
+        plt.figure(figsize=(10, 5))
+        plt.plot(Time, ExpData[0:end,12], label='Experimental', marker='x', 
+         linewidth=1, markersize=2, color='green')
+        plt.plot(Time, np.rad2deg(angularVelocity1[0:end, 3]), label='Simulation', linestyle='--', marker='x', 
+         linewidth=1, markersize=2, color='black')
+        plt.xlabel('Time, s')  # Adjust label as appropriate
+        plt.ylabel('Angular velocity 1, deg/s')  # Adjust label as appropriate
+        plt.legend(loc='upper left')  # Specify legend location
+        plt.grid(True)  # Add grid
+        # Set axis limits
+        plt.xlim(0, self.endTime)
+        plt.ylim(-10, 10)
+        plt.tight_layout()
+        plt.savefig('solution/angularVelocity1.png')
+        plt.show()
+
+        
+
+        
+        # Lift actuator
+        plt.figure(figsize=(10, 5))
+        plt.plot(Time, ExpData[0:end,15], label='Experimental', marker='x', 
+         linewidth=1, markersize=2, color='green')
+        plt.plot(Time, np.rad2deg(angularVelocity2[0:end, 3])-np.rad2deg(angularVelocity1[0:end, 3]), label='Simulation', linestyle='--', marker='x', 
+         linewidth=1, markersize=2, color='black')
+        plt.xlabel('Time, s')  # Adjust label as appropriate
+        plt.ylabel('Angular velocity 2, deg/s')  # Adjust label as appropriate
+        plt.legend(loc='upper left')  # Specify legend location
+        plt.grid(True)  # Add grid
+        # Set axis limits
+        plt.xlim(0, self.endTime)
+        plt.ylim(-50, 50)
+        plt.tight_layout()
+        plt.savefig('solution/angularVelocity2.png')
+        plt.show()
+
+
+        # Lift actuator
+        plt.figure(figsize=(10, 5))
+        plt.plot(Time, ExpData[0:end,2]+1000*L_Cyl1, label='Experimental', marker='x', 
+         linewidth=1, markersize=2, color='green')
+        plt.plot(Time, (sDistance1[0:end, 1])*1000, label='Simulation', linestyle='--', marker='x', 
+         linewidth=1, markersize=2, color='black')
+        plt.xlabel('Time, s')  # Adjust label as appropriate
+        plt.ylabel('Actuator 1, mm')  # Adjust label as appropriate
+        plt.legend(loc='upper left')  # Specify legend location
+        plt.grid(True)  # Add grid
+        # Set axis limits
+        plt.xlim(0, self.endTime)
+        plt.ylim(500, 1500)
+        plt.tight_layout()
+        plt.savefig('solution/sDistance1.png')
         plt.show()
         
         
         # Lift actuator
         plt.figure(figsize=(10, 5))
-        plt.plot(sDistance1[:, 0], np.rad2deg(sDistance2[:, 3]-sDistance1[:, 3]), label='Simulation', linestyle='--', marker='x', 
-        linewidth=1, markersize=2, color='black')
+        plt.plot(Time, ExpData[0:end,6]+1000*L_Cyl2, label='Experimental', marker='x', 
+         linewidth=1, markersize=2, color='green')
+        plt.plot(Time, (sDistance2[0:end, 1])*1000, label='Simulation', linestyle='--', marker='x', 
+         linewidth=1, markersize=2, color='black')
         plt.xlabel('Time, s')  # Adjust label as appropriate
-        plt.ylabel('Angle, degree')  # Adjust label as appropriate
-        plt.legend(loc='upper right')  # Specify legend location
-        plt.grid(True)  # Add grid
-        # Set axis limits
-        plt.xlim(0, 10)
-        plt.ylim(-60, -10)
-        plt.tight_layout()
-        plt.savefig(f"solution/Flexible_f_modes_{self.nModes}_angle2.png")
-        plt.show()
-
-        plt.figure(figsize=(10, 5))
-        plt.plot(sDistance1[:, 0], np.rad2deg(sVelocity2[:, 3]-sVelocity1[:, 3]), label='Simulation', linestyle='--', marker='x', 
-                 linewidth=1, markersize=2, color='black')
-        plt.xlabel('Time, s')  # Adjust label as appropriate
-        plt.ylabel('Angular velocity, deg/s')  # Adjust label as appropriate
+        plt.ylabel('Actuator 2, mm')  # Adjust label as appropriate
         plt.legend(loc='upper left')  # Specify legend location
         plt.grid(True)  # Add grid
         # Set axis limits
-        plt.xlim(0, 10)
-        plt.ylim(-25, 25)
-        plt.savefig(f"solution/Flexible_f_modes_{self.nModes}angularvelocity2.png")
+        plt.xlim(0, self.endTime)
+        plt.ylim(800, 1600)
+        plt.tight_layout()
+        plt.savefig('solution/sDistance2.png')
+        plt.show()
+
+
+        # Lift actuator
+        plt.figure(figsize=(10, 5))
+        plt.plot(Time, ExpData[0:end,3]*1e5, label='Experimental', marker='x', 
+         linewidth=1, markersize=2, color='green')
+        plt.plot(Time, sPressuresL[0:end,1], label='Simulation', linestyle='--', marker='x', 
+         linewidth=1, markersize=2, color='black')
+        plt.xlabel('Time, s')  # Adjust label as appropriate
+        plt.ylabel('p1,pa')  # Adjust label as appropriate
+        plt.legend(loc='upper left')  # Specify legend location
+        plt.grid(True)  # Add grid
+        # Set axis limits
+        plt.xlim(0, self.endTime)
+        plt.ylim(0, 200e5)
+        plt.tight_layout()
+        plt.savefig('solution/p1.png')
         plt.show()
         
-
+        # Lift actuator
+        plt.figure(figsize=(10, 5))
+        plt.plot(Time, ExpData[0:end,4]*1e5, label='Experimental', marker='x', 
+         linewidth=1, markersize=2, color='green')
+        plt.plot(Time, sPressuresL[0:end,2], label='Simulation', linestyle='--', marker='x', 
+         linewidth=1, markersize=2, color='black')
+        plt.xlabel('Time, s')  # Adjust label as appropriate
+        plt.ylabel('p2, Pa')  # Adjust label as appropriate
+        plt.legend(loc='upper left')  # Specify legend location
+        plt.grid(True)  # Add grid
+        # Set axis limits
+        plt.xlim(0, self.endTime)
+        plt.ylim(0, 200e5)
+        plt.tight_layout()
+        plt.savefig('solution/p2.png')
+        plt.show()
         
+        
+        # Lift actuator
+        plt.figure(figsize=(10, 5))
+        plt.plot(Time, ExpData[0:end,7]*1e5, label='Experimental', marker='x', 
+         linewidth=1, markersize=2, color='green')
+        plt.plot(Time, sPressuresT[0:end,1], label='Simulation', linestyle='--', marker='x', 
+         linewidth=1, markersize=2, color='black')
+        plt.xlabel('Time, s')  # Adjust label as appropriate
+        plt.ylabel('p3, Pa')  # Adjust label as appropriate
+        plt.legend(loc='upper left')  # Specify legend location
+        plt.grid(True)  # Add grid
+        # Set axis limits
+        plt.xlim(0, self.endTime)
+        plt.ylim(0, 200e5)
+        plt.tight_layout()
+        plt.savefig('solution/p3.png')
+        plt.show()
+        
+        # Lift actuator
+        plt.figure(figsize=(10, 5))
+        plt.plot(Time, ExpData[0:end,8]*1e5, label='Experimental', marker='x', 
+         linewidth=1, markersize=2, color='green')
+        plt.plot(Time, sPressuresT[0:end,2], label='Simulation', linestyle='--', marker='x', 
+         linewidth=1, markersize=2, color='black')
+        plt.xlabel('Time, s')  # Adjust label as appropriate
+        plt.ylabel('p4, Pa')  # Adjust label as appropriate
+        plt.legend(loc='upper left')  # Specify legend location
+        plt.grid(True)  # Add grid
+        # Set axis limits
+        plt.xlim(0, self.endTime)
+        plt.ylim(0, 200e5)
+        plt.tight_layout()
+        plt.savefig('solution/p4.png')
+        plt.show()
+
         
         # data_dict = data[1]
         
