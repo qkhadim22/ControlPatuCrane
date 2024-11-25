@@ -478,7 +478,7 @@ class NNHydraulics():
             LiftBoomFFRF        = LiftBoom.AddObjectFFRFreducedOrder(self.mbs, positionRef=np.array([-0.09, 1.4261, 0]), 
                                                           initialVelocity=[0,0,0], 
                                                           initialAngularVelocity=[0,0,0],
-                                                          rotationMatrixRef  = RotationMatrixZ((self.theta1)),
+                                                          rotationMatrixRef  = RotationMatrixZ(mt.radians(self.theta1)),
                                                           gravity=g,
                                                           color=colLift,)
 
@@ -527,7 +527,9 @@ class NNHydraulics():
             
             MarkerEx        = self.mbs.AddMarker(MarkerSuperElementRigid(bodyNumber=TiltBoomFFRF['oFFRFreducedOrder'], 
                                                                                   meshNodeNumbers=np.array(nodeListExtT), #these are the meshNodeNumbers
-                                                                                  weightingFactors=noodeWeightsExt1T))  
+                                                                                  weightingFactors=noodeWeightsExt1T)) 
+            
+            nAngle2         = feT.GetNodeAtPoint(np.array([0.655044198,  0.335172713, -0.0486667007]),tolerance=1e-2)
        
        
         else:
@@ -621,7 +623,7 @@ class NNHydraulics():
                 theta3 = np.radians(theta3_degrees)
                 theta4 = np.radians(theta4_degrees) 
                                 
-                eq1 =    l3 * cos(theta3) + l4 * cos(np.pi-theta4) + l2x -d1
+                eq1 =    l3 * cos(theta3) + l4 * cos(np.pi-theta4) + l2x +d1
                 eq2 =    l3 * sin(theta3) + l4 * sin(np.pi-theta4) + l2y +h1
                 
                 return [eq1, eq2]
@@ -687,7 +689,7 @@ class NNHydraulics():
 
         # # # # 5th Body: Bracket 2
         pMid6           = np.array([1.15, 0.06, 0])  # center of mass, body0
-        iCube6          = RigidBodyInertia(mass=58.63, com=pMid6,
+        iCube6          = RigidBodyInertia(mass=58.63+70, com=pMid6,
                                                inertiaTensor=np.array([[0.13, 0, 0],
                                                                        [0.10,  28.66, 0],
                                                                        [0,              0,  28.70]]),
@@ -863,15 +865,22 @@ class NNHydraulics():
         
         if self.Flexible:
             Angle1       = self.mbs.AddSensor(SensorNode( nodeNumber=LiftBoomFFRF['nRigidBody'], storeInternal=True, 
-                                                        fileName = f"solution/Simulation_Flexible_f_modes_{self.nModes}_angle1.txt", outputVariableType=exu.OutputVariableType.Rotation))
-            Angle2       = self.mbs.AddSensor(SensorNode(nodeNumber= TiltBoomFFRF['nRigidBody'], storeInternal=True,
-                                                         fileName = f"solution/Simulation_Flexible_f_modes_{self.nModes}_angle2.txt", outputVariableType=exu.OutputVariableType.Rotation))
+                                                        fileName = f"solution/Simulation_Flexible_f_modes_{self.nModes}_angle1.txt", 
+                                                        outputVariableType=exu.OutputVariableType.Rotation))
+            Angle2       = self.mbs.AddSensor(SensorNode(nodeNumber=TiltBoomFFRF['nRigidBody'], storeInternal=True,
+                                                         fileName = f"solution/Simulation_Flexible_f_modes_{self.nModes}_angle2.txt", 
+                                                         outputVariableType=exu.OutputVariableType.Rotation))
+            
+            
             AngVelocity1       = self.mbs.AddSensor(SensorNode( nodeNumber=LiftBoomFFRF['nRigidBody'], storeInternal=True,
                                                                fileName = f"solution/Simulation_Flexible_f_modes_{self.nModes}_angularVelocity1.txt", 
                                                                outputVariableType=exu.OutputVariableType.AngularVelocity))
             AngVelocity2       = self.mbs.AddSensor(SensorNode(nodeNumber= TiltBoomFFRF['nRigidBody'], storeInternal=True,
                                                                fileName = f"solution/Simulation_Flexible_f_modes_{self.nModes}_angularVelocity2.txt", outputVariableType=exu.OutputVariableType.AngularVelocity))
            
+            
+            
+            
             sForce1          = self.mbs.AddSensor(SensorObject(objectNumber=oHA1, storeInternal=True, fileName = 'solution/sForce1.txt',
                                                                outputVariableType=exu.OutputVariableType.Force))
             sForce2          = self.mbs.AddSensor(SensorObject(objectNumber=oHA2, storeInternal=True, fileName = 'solution/sForce2.txt',
@@ -967,7 +976,10 @@ class NNHydraulics():
         self.simulationSettings.displayStatistics                        = True
         self.simulationSettings.displayComputationTime                   = True
         self.simulationSettings.linearSolverSettings.ignoreSingularJacobian=True
-        #self.simulationSettings.timeIntegration.generalizedAlpha.spectralRadius  = 0.7
+        self.simulationSettings.timeIntegration.simulateInRealtime              = 1e-3
+
+
+        self.simulationSettings.timeIntegration.generalizedAlpha.spectralRadius  = 0.7
 
         self.SC.visualizationSettings.nodes.show = False
         
@@ -1065,13 +1077,17 @@ class NNHydraulics():
         end = Time.shape[0]
        
         if self.Flexible:
-        #sAngle1         = np.loadtxt(f"solution/Simulation_Flexible_f_modes_{self.nModes}_angle1.txt", delimiter=',')
-        #sAngle2         = np.loadtxt(f"solution/Simulation_Flexible_f_modes_{self.nModes}_angle2.txt", delimiter=',')
-        
-        # sDistance1    = np.loadtxt(f"solution/Simulation_Flexible_f_modes_{self.nModes}_sDistance1.txt", delimiter=',')
-        # sDistance2    = np.loadtxt(f"solution/Simulation_Flexible_f_modes_{self.nModes}_sDistance2.txt", delimiter=',')
-        #sVelocity1   = np.loadtxt(f"solution/Simulation_Flexible_f_modes_{self.nModes}_angularVelocity1.txt", delimiter=',')
-            sVelocity2   = np.loadtxt(f"solution/Simulation_Flexible_f_modes_{self.nModes}_angularVelocity2.txt", delimiter=',')
+            Angle1                   = np.loadtxt(f"solution/Simulation_Flexible_f_modes_{self.nModes}_angle1.txt", delimiter=',')
+            Angle2                   = np.loadtxt(f"solution/Simulation_Flexible_f_modes_{self.nModes}_angle2.txt", delimiter=',')
+            angularVelocity1         = np.loadtxt(f"solution/Simulation_Flexible_f_modes_{self.nModes}_angularVelocity1.txt", delimiter=',')
+            angularVelocity2         = np.loadtxt(f"solution/Simulation_Flexible_f_modes_{self.nModes}_angularVelocity2.txt", delimiter=',')
+   
+            sDistance1               = np.loadtxt('solution/sDistance1.txt', delimiter=',')
+            sDistance2               = np.loadtxt('solution/sDistance2.txt', delimiter=',')
+            #sVelocity1               = np.loadtxt('solution/sVelocity1.txt', delimiter=',')
+            #sVelocity2               = np.loadtxt('solution/sVelocity2.txt', delimiter=',')    
+            sPressuresL             = np.loadtxt('solution/sPressuresL.txt', delimiter=',')
+            sPressuresT             = np.loadtxt('solution/sPressuresT.txt', delimiter=',')
         
         else:
             Angle1                   = np.loadtxt('solution/Simulation_Rigid_angle1.txt', delimiter=',')
@@ -1109,7 +1125,7 @@ class NNHydraulics():
 
          # Lift actuator
         plt.figure(figsize=(10, 5))
-        plt.plot(Time, np.rad2deg(Angle1[0:end, 3])+np.rad2deg(Angle2[0:end, 3]), label='Simulation', linestyle='--', marker='x', 
+        plt.plot(Time, np.rad2deg(Angle2[0:end, 3])+7.96, label='Simulation', linestyle='--', marker='x', 
           linewidth=1, markersize=2, color='black')
          
         plt.plot(Time, ExpData[0:end,17], label='Experimental', marker='x', 
