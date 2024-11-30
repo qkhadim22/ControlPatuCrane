@@ -34,11 +34,11 @@ ExpData = np.loadtxt(fileName, delimiter=' ')
 ###############################
 
 timeStep    = 1e-3                  #Simulation time step: Change it as desired.
-T           = 29                    #Time period
+T           =  29                 #Time period
 ns          = int(T/timeStep)       
 angleInit1  = ExpData[0,16]         #np.deg2rad(14.6)  #Lift boom angle               
 angleInit2  = ExpData[0,17]         #np.deg2rad(-58.8)     #Tilt boom angle 
-LiftLoad    = 0
+LiftLoad    = 480              #469.1387
 
 Plotting    =  True
 
@@ -46,7 +46,7 @@ dataPath    = 'solution/data' + str(T) + '-' + 's' + str(ns) + 'Steps'
 
 
 model       = NNHydraulics(nStepsTotal=ns, endTime=T,  mL    = LiftLoad,
-                           Flexible=True, nModes=2, loadFromSavedNPY=True, 
+                           Flexible=False, nModes=2, loadFromSavedNPY=True, 
                       verboseMode=1)
 
 inputVec    =model.CreateInputVector( ns,  angleInit1,angleInit2 )

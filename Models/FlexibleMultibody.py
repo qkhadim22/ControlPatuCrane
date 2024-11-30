@@ -27,6 +27,7 @@ from Models.ControlSignals import uref_1, uref_2,Pump
 import matplotlib.pyplot as plt
 from exudyn.plot import PlotSensor, listMarkerStyles
 from exudyn.signalProcessing import GetInterpolatedSignalValue
+from exudyn.physics import StribeckFunction
 
 
 
@@ -82,7 +83,7 @@ W5              = 0.15           # Width in z-direction
 pS              = 100e5
 pT              = 1e5                           # Tank pressure
 Qn1             = (18/60000)/((9.9)*sqrt(35e5))        # 10*(18/60000)/(sqrt(20e5)*9.9), Nominal flow rate of valve at 18 l/min under
-Qn2             = (18/60000)/((9.9)*sqrt(35e5)) # 10*(22/60000)/(sqrt(20e5)*9.9), # Nominal flow rate of valve at 18 l/min under
+Qn2             = (35/60000)/((9.9)*sqrt(35e5)) # 10*(22/60000)/(sqrt(20e5)*9.9), # Nominal flow rate of valve at 18 l/min under
 
 # Cylinder and piston parameters
 L_Cyl1          = 820e-3                            # Cylinder length
@@ -97,8 +98,8 @@ d_1             = 12.7e-3                         # Dia of volume 1
 V1              = (pi/4)*(d_1)**2*1.5             # Volume V1 = V0
 V2              = (pi/4)*(d_1)**2*1.5             # Volume V2 = V1
 A               = [A_1, A_2]
-Bh              = 700e6
-Bc              = 2.1000e+11
+Bh              = 700e6        #700e6
+Bc              = 2.1000e+11   #2.1000e+11
 Bo              = 1650e6
 Fc              = 210
 Fs              = 300
@@ -689,7 +690,7 @@ class NNHydraulics():
 
         # # # # 5th Body: Bracket 2
         pMid6           = np.array([1.15, 0.06, 0])  # center of mass, body0
-        iCube6          = RigidBodyInertia(mass=58.63+70, com=pMid6,
+        iCube6          = RigidBodyInertia(mass=58.63, com=pMid6,
                                                inertiaTensor=np.array([[0.13, 0, 0],
                                                                        [0.10,  28.66, 0],
                                                                        [0,              0,  28.70]]),
@@ -711,7 +712,7 @@ class NNHydraulics():
             pos = self.mbs.GetMarkerOutput(TipLoadMarker, variableType=exu.OutputVariableType.Position, 
                                            configuration=exu.ConfigurationType.Reference)
             print('pos=', pos)
-            bMass = self.mbs.CreateMassPoint(physicsMass=self.mL, referencePosition=pos, show=True,
+            bMass = self.mbs.CreateMassPoint(physicsMass=self.mL, referencePosition=pos, gravity=g, show=True,
                                      graphicsDataList=[GraphicsDataSphere(radius=0.1, color=color4red)])
             mMass = self.mbs.AddMarker(MarkerBodyPosition(bodyNumber=bMass))
             self.mbs.AddObject(SphericalJoint(markerNumbers=[TipLoadMarker, mMass], visualization=VSphericalJoint(show=False)))             #With LIft Boom,-0.475 
@@ -765,22 +766,27 @@ class NNHydraulics():
                                                 initialCoordinates=[self.p3,
                                                                     self.p4],  # initialize with 20 bar
                                                                     numberOfODE1Coordinates=2))
-        def UFfrictionSpringDamper1(mbs, t, itemIndex, u, v, k, d, f0): 
-                return   1*(Fc*tanh(4*(abs(v    )/vs))+(Fs-Fc)*((abs(v    )/vs)/((1/4)*(abs(v    )/vs)**2+3/4)**2))*np.sign(v )+sig2*v    *tanh(4)
+           
+        def CylinderFriction1(mbs, t, itemNumber, u, v, k, d, F0):
 
-                    
-        def UFfrictionSpringDamper2(mbs, t, itemIndex, u, v, k, d, f0): 
-                 return   0.5*(Fc*tanh(4*(abs(v    )/vs))+(Fs-Fc)*((abs(v    )/vs)/((1/4)*(abs(v    )/vs)**2+3/4)**2))*np.sign(v )+sig2*v    *tanh(4)
-                    
-                    
-        oFriction1       = self.mbs.AddObject(ObjectConnectorSpringDamper(markerNumbers=[Marker5, Marker8], referenceLength=0.001,stiffness=0,
-                                                            damping=0, force=0, velocityOffset = 0., activeConnector = True,
-                                                            springForceUserFunction=UFfrictionSpringDamper1,
+                Ff = 1*StribeckFunction(v, muDynamic=1, muStaticOffset=1.5, regVel=1e-4)+(k*(u) + d*v + k*(u)**3-F0)
+                #print(Ff)
+                return Ff
+            
+        def CylinderFriction2(mbs, t, itemNumber, u, v, k, d, F0):
+
+                Ff =  1*StribeckFunction(v, muDynamic=0.5, muStaticOffset=0.5, regVel=1e-2) - (k*(u) - d*v + k*(u)**3 -F0)
+                #print(Ff)
+                return Ff
+            
+        oFriction1       = self.mbs.AddObject(ObjectConnectorSpringDamper(markerNumbers=[Marker5, Marker8], referenceLength=0,stiffness=2000,
+                                                            damping=5000, force=80, velocityOffset = 0., activeConnector = True,
+                                                            springForceUserFunction=CylinderFriction1,
                                                               visualization=VSpringDamper(show=False) ))
                         
-        oFriction2       = self.mbs.AddObject(ObjectConnectorSpringDamper(markerNumbers=[Marker9, Marker16], referenceLength=0.001,stiffness=0,
-                                                              damping=0, force=0, velocityOffset = 0., activeConnector = True,
-                                                              springForceUserFunction=UFfrictionSpringDamper2,
+        oFriction2       = self.mbs.AddObject(ObjectConnectorSpringDamper(markerNumbers=[Marker9, Marker16], referenceLength=0,stiffness=1250,
+                                                              damping=5000, force=50, velocityOffset = 0, activeConnector = True,
+                                                              springForceUserFunction=CylinderFriction2,
                                                                 visualization=VSpringDamper(show=False) ))
         oHA1 = None
         oHA2 = None
@@ -789,7 +795,7 @@ class NNHydraulics():
                 oHA1                = self.mbs.AddObject(HydraulicActuatorSimple(name='LiftCylinder', markerNumbers=[ Marker5, Marker8], 
                                                         nodeNumbers=[nODE1], offsetLength=LH1, strokeLength=L_Pis1, chamberCrossSection0=A[0], 
                                                         chamberCrossSection1=A[1], hoseVolume0=V1, hoseVolume1=V2, valveOpening0=0, 
-                                                        valveOpening1=0, actuatorDamping=5e5, oilBulkModulus=Bo, cylinderBulkModulus=Bc, 
+                                                        valveOpening1=0, actuatorDamping=0*5e5, oilBulkModulus=Bo, cylinderBulkModulus=Bc, 
                                                         hoseBulkModulus=Bh, nominalFlow=Qn1, systemPressure=0, tankPressure=pT, 
                                                         useChamberVolumeChange=True, activeConnector=True, 
                                                         visualization={'show': True, 'cylinderRadius': 50e-3, 'rodRadius': 28e-3, 
@@ -800,7 +806,7 @@ class NNHydraulics():
                 oHA2 = self.mbs.AddObject(HydraulicActuatorSimple(name='TiltCylinder', markerNumbers=[Marker9, Marker16], 
                                                           nodeNumbers=[nODE2], offsetLength=LH2, strokeLength=L_Pis2, chamberCrossSection0=A[0], 
                                                           chamberCrossSection1=A[1], hoseVolume0=V1, hoseVolume1=V2, valveOpening0=0, 
-                                                          valveOpening1=0, actuatorDamping=0.06e5, oilBulkModulus=Bo, cylinderBulkModulus=Bc, 
+                                                          valveOpening1=0, actuatorDamping=0.6e5, oilBulkModulus=Bo, cylinderBulkModulus=Bc, 
                                                           hoseBulkModulus=Bh, nominalFlow=Qn2, systemPressure=0, tankPressure=pT, 
                                                           useChamberVolumeChange=True, activeConnector=True, 
                                                           visualization={'show': True, 'cylinderRadius': 50e-3, 'rodRadius': 28e-3, 
@@ -1105,11 +1111,10 @@ class NNHydraulics():
         
         # Lift actuator
         plt.figure(figsize=(10, 5))
-        plt.plot(Time, np.rad2deg(Angle1[0:end, 3]), label='Simulation', linestyle='--', marker='x', 
-         linewidth=1, markersize=2, color='black')
-        
         plt.plot(Time, ExpData[0:end,16], label='Experimental', marker='x', 
          linewidth=1, markersize=2, color='green')
+        plt.plot(Time, np.rad2deg(Angle1[0:end, 3]), label='Simulation', linestyle='--', marker='x', 
+         linewidth=1, markersize=2, color='black')
         
         plt.xlabel('Time, s')  # Adjust label as appropriate
         plt.ylabel('Angle 1, degree')  # Adjust label as appropriate
@@ -1117,7 +1122,7 @@ class NNHydraulics():
         plt.grid(True)  # Add grid
         # Set axis limits
         plt.xlim(0, self.endTime)
-        plt.ylim(0, 50)
+        plt.ylim(0, 35)
         plt.tight_layout()
         plt.savefig('solution/angle1.png')
         plt.show()
@@ -1125,11 +1130,10 @@ class NNHydraulics():
 
          # Lift actuator
         plt.figure(figsize=(10, 5))
-        plt.plot(Time, np.rad2deg(Angle2[0:end, 3])+7.96, label='Simulation', linestyle='--', marker='x', 
-          linewidth=1, markersize=2, color='black')
-         
         plt.plot(Time, ExpData[0:end,17], label='Experimental', marker='x', 
           linewidth=1, markersize=2, color='green')
+        plt.plot(Time, np.rad2deg(Angle2[0:end, 3])+7.96, label='Simulation', linestyle='--', marker='x', 
+          linewidth=1, markersize=2, color='black')
          
         plt.xlabel('Time, s')  # Adjust label as appropriate
         plt.ylabel('Angle 2, degree')  # Adjust label as appropriate
@@ -1137,7 +1141,7 @@ class NNHydraulics():
         plt.grid(True)  # Add grid
         # Set axis limits
         plt.xlim(0, self.endTime)
-        plt.ylim(-90, 90)
+        plt.ylim(-60, 0)
         plt.tight_layout()
         plt.savefig('solution/angle2.png')
         plt.show()
@@ -1174,7 +1178,7 @@ class NNHydraulics():
         plt.grid(True)  # Add grid
         # Set axis limits
         plt.xlim(0, self.endTime)
-        plt.ylim(-50, 50)
+        plt.ylim(-25, 25)
         plt.tight_layout()
         plt.savefig('solution/angularVelocity2.png')
         plt.show()
@@ -1192,7 +1196,7 @@ class NNHydraulics():
         plt.grid(True)  # Add grid
         # Set axis limits
         plt.xlim(0, self.endTime)
-        plt.ylim(500, 1500)
+        plt.ylim(900, 1200)
         plt.tight_layout()
         plt.savefig('solution/sDistance1.png')
         plt.show()
@@ -1200,7 +1204,7 @@ class NNHydraulics():
         
         # Lift actuator
         plt.figure(figsize=(10, 5))
-        plt.plot(Time, ExpData[0:end,6]+1000*L_Cyl2, label='Experimental', marker='x', 
+        plt.plot(Time, ExpData[0:end,6]+1000*L_Cyl2+30, label='Experimental', marker='x', 
          linewidth=1, markersize=2, color='green')
         plt.plot(Time, (sDistance2[0:end, 1])*1000, label='Simulation', linestyle='--', marker='x', 
          linewidth=1, markersize=2, color='black')
@@ -1210,7 +1214,7 @@ class NNHydraulics():
         plt.grid(True)  # Add grid
         # Set axis limits
         plt.xlim(0, self.endTime)
-        plt.ylim(800, 1600)
+        plt.ylim(1250, 1600)
         plt.tight_layout()
         plt.savefig('solution/sDistance2.png')
         plt.show()
@@ -1228,7 +1232,7 @@ class NNHydraulics():
         plt.grid(True)  # Add grid
         # Set axis limits
         plt.xlim(0, self.endTime)
-        plt.ylim(0, 200e5)
+        plt.ylim(100e5, 200e5)
         plt.tight_layout()
         plt.savefig('solution/p1.png')
         plt.show()
@@ -1245,7 +1249,7 @@ class NNHydraulics():
         plt.grid(True)  # Add grid
         # Set axis limits
         plt.xlim(0, self.endTime)
-        plt.ylim(0, 200e5)
+        plt.ylim(0e5, 100e5)
         plt.tight_layout()
         plt.savefig('solution/p2.png')
         plt.show()
@@ -1263,7 +1267,7 @@ class NNHydraulics():
         plt.grid(True)  # Add grid
         # Set axis limits
         plt.xlim(0, self.endTime)
-        plt.ylim(0, 200e5)
+        plt.ylim(0, 75e5)
         plt.tight_layout()
         plt.savefig('solution/p3.png')
         plt.show()
@@ -1280,7 +1284,7 @@ class NNHydraulics():
         plt.grid(True)  # Add grid
         # Set axis limits
         plt.xlim(0, self.endTime)
-        plt.ylim(0, 200e5)
+        plt.ylim(50e5, 150e5)
         plt.tight_layout()
         plt.savefig('solution/p4.png')
         plt.show()
